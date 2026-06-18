@@ -58,6 +58,19 @@ tailwind.config = {
 
 <div id="root"></div>
 
+<script>
+window.onerror = function(msg, url, line, col, error) {
+  document.getElementById("root").innerHTML =
+    '<div style="background:#7f1d1d;color:#fff;padding:20px;margin:20px;border-radius:10px;font-family:monospace;font-size:14px;white-space:pre-wrap;direction:ltr;">' +
+    '🚨 خطأ:\n' + msg + '\nسطر: ' + line + ' عمود: ' + col +
+    '</div>';
+  document.getElementById("root").style.display = "block";
+  var rw = document.getElementById("rw");
+  if (rw) rw.style.display = "none";
+  return false;
+};
+</script>
+
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
