@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#059669">
+<title>منظومة دوائي - الصيدلية</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+* { font-family: 'Cairo', sans-serif; }
+html, body, #root { width:100%; height:100%; margin:0; padding:0; overflow:hidden; }
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-thumb { background:rgba(52,211,153,.3); border-radius:4px; }
+@media (orientation:portrait) { #rw{display:flex!important} #root{display:none!important} }
+@media (orientation:landscape) { #rw{display:none!important} }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+.fade-in { animation:fadeIn .2s ease forwards; }
+@keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+.slide-in { animation:slideIn .3s ease forwards; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.8)} }
+.pulse { animation:pulse 1.5s ease-in-out infinite; }
+@keyframes ring { 0%,100%{transform:rotate(0)} 20%{transform:rotate(-15deg)} 40%{transform:rotate(15deg)} 60%{transform:rotate(-10deg)} 80%{transform:rotate(10deg)} }
+.ring { animation:ring .5s ease; }
+</style>
+</head>
+<body>
+<div id="rw" style="display:none;position:fixed;inset:0;background:#020a06;z-index:9999999;
+  flex-direction:column;align-items:center;justify-content:center;gap:18px;color:#fff;text-align:center;padding:30px;">
+  <i class="fa-solid fa-rotate" style="font-size:60px;color:#34d399;"></i>
+  <h2 style="font-size:22px;font-weight:900;color:#34d399;">يرجى تدوير الجهاز أفقياً</h2>
+  <p style="font-size:13px;color:#6b7280;">واجهة الصيدلية تعمل بالوضع الأفقي فقط</p>
+</div>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const QUEUE_KEY   = "dwaee_queue";
+const STOCK_KEY   = "dwaee_stock";
+const NOTIF_KEY   = "dwaee_notifications";
+const THEME_KEY   = "dwaee_ph_th";
+
+// بيانات المخزن الافتراضية
+const DEF_STOCK = [
+  { id:"s1", name:"Amoxicillin 500mg",  qty:45, minQty:10, price:5000,  expiry:"2026-08", barcode:"6001234" },
+  { id:"s2", name:"Paracetamol 500mg",  qty:8,  minQty:15, price:2000,  expiry:"2025-12", barcode:"6001235" },
+  { id:"s3", name:"Zofran Amp",          qty:3,  minQty:5,  price:15000, expiry:"2026-03", barcode:"6001236" },
+  { id:"s4", name:"Metformin 500mg",     qty:60, minQty:20, price:3000,  expiry:"2027-06", barcode:"6001237" },
+  { id:"s5", name:"Omeprazole 20mg",     qty:2,  minQty:10, price:4000,  expiry:"2024-11", barcode:"6001238" },
+];
+
+// ===== دوال مساعدة =====
+function getExpClass(expiry) {
+  if (!expiry) return "safe";
+  try {
+    const [y,m] = expiry.split("-").map(Number);
+    const exp = new Date(y, (m||1)-1, 1);
+    const now = new Date(); now.setDate(1);
+    if (exp < now) return "expired";
+    const diff = Math.ceil(Math.abs(exp-now)/(1000*60*60*24*30));
+    return diff <= 6 ? "warning" : "safe";
+  } catch { return "safe"; }
+}
+
+function ExpBadge({ expiry, dark }) {
+  const cls = getExpClass(expiry);
+  const map = {
+    expired: { bg:"rgba(248,113,113,.2)", color:"#f87171", bor:"rgba(248,113,113,.4)", label:"منتهي" },
+    warning: { bg:"rgba(251,191,36,.15)", color:"#fbbf24", bor:"rgba(251,191,36,.35)", label:"قريب" },
+    safe:    { bg:"rgba(52,211,153,.12)", color:"#34d399", bor:"rgba(52,211,153,.3)",  label:expiry||"—" },
+  };
+  const s = map[cls];
+  return <span style={{ padding:"2px 8px", borderRadius:6, fontSize:9, fontWeight:700,
+    background:s.bg, color:s.color, border:`1px solid ${s.bor}` }}>{cls==="safe"?s.label:s.label+" "+expiry}</span>;
+}
+
+function Card({ children, dark, style={} }) {
+  return (
+    <div style={{
+      background: dark?"#131B2E":"#ffffff",
+      border:`1px solid ${dark?"#1E293B":"#f1f5f9"}`,
+      borderRadius:14, position:"relative", overflow:"hidden",
+      boxShadow: dark?"0 8px 32px rgba(0,0,0,.4),0 1px 0 rgba(52,211,153,.06) inset"
+                     :"0 4px 16px rgba(0,0,0,.06)",
+      ...style
+    }}>
+      {dark && <div style={{ position:"absolute",top:0,left:0,right:0,height:1,
+        background:"linear-gradient(90deg,transparent,rgba(52,211,153,.2),transparent)" }}/>}
+      {children}
+    </div>
+  );
+}
+
+// ===== التطبيق الرئيسي =====
+function PharmacyApp() {
+  const [dark, setDark]       = useState(()=>localStorage.getItem(THEME_KEY)!=="light");
+  const [tab, setTab]         = useState("prescriptions");
+  const [queue, setQueue]     = useState(()=>JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]"));
+  const [stock, setStock]     = useState(()=>JSON.parse(localStorage.getItem(STOCK_KEY)||"null")||DEF_STOCK);
+  const [notifs, setNotifs]   = useState([]);
+  const [showNotif, setShowNotif] = useState(false);
+  const [expandedRx, setExpandedRx] = useState(null);
+  const [toast, setToast]     = useState(null);
+  const [search, setSearch]   = useState("");
+  const [stockSearch, setStockSearch] = useState("");
+  const [showAddStock, setShowAddStock] = useState(false);
+  const [newStock, setNewStock] = useState({ name:"",qty:"",minQty:"",price:"",expiry:"",barcode:"" });
+  const bellRef = useRef();
+
+  useEffect(()=>{ localStorage.setItem(THEME_KEY, dark?"dark":"light"); },[dark]);
+  useEffect(()=>{ localStorage.setItem(STOCK_KEY, JSON.stringify(stock)); },[stock]);
+
+  // مزامنة مع السكرتير والطبيب
+  useEffect(()=>{
+    const sync=()=>{
+      const q=JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]");
+      setQueue(q);
+    };
+    const interval=setInterval(sync,1000);
+    window.addEventListener("storage",sync);
+    return ()=>{ clearInterval(interval); window.removeEventListener("storage",sync); };
+  },[]);
+
+  // استقبال الإشعارات
+  useEffect(()=>{
+    const check=()=>{
+      const stored=JSON.parse(localStorage.getItem(NOTIF_KEY)||"[]");
+      if(stored.length>0){
+        setNotifs(p=>[...stored,...p].slice(0,20));
+        localStorage.setItem(NOTIF_KEY,"[]");
+        playBeep();
+        if(bellRef.current){ bellRef.current.classList.add("ring"); setTimeout(()=>bellRef.current?.classList.remove("ring"),500); }
+      }
+    };
+    const interval=setInterval(check,1500);
+    return ()=>clearInterval(interval);
+  },[]);
+
+  function playBeep(){
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.type="sine"; o.frequency.setValueAtTime(1050,ctx.currentTime);
+      g.gain.setValueAtTime(0.1,ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.01,ctx.currentTime+0.1);
+      o.connect(g);g.connect(ctx.destination);o.start();o.stop(ctx.currentTime+0.1);
+    }catch(e){}
+  }
+
+  function showToast(msg,ok=false){ setToast({msg,ok}); setTimeout(()=>setToast(null),3000); }
+
+  // الوصفات من الطابور
+  const prescriptions = queue.filter(p=>p.meds&&p.meds.length>0);
+
+  // صرف الوصفة
+  function dispense(patientId){
+    const updated=queue.map(p=>{
+      if(p.id!==patientId) return p;
+      // تحديث المخزن
+      const newStock=[...stock];
+      p.meds?.forEach(med=>{
+        const idx=newStock.findIndex(s=>s.barcode===med.barcode||s.name===med.name);
+        if(idx>=0) newStock[idx]={ ...newStock[idx], qty:Math.max(0,newStock[idx].qty-1) };
+      });
+      setStock(newStock);
+      return { ...p, status:"done", dispensedAt:new Date().toLocaleTimeString("ar-IQ",{hour:"2-digit",minute:"2-digit"}) };
+    });
+    setQueue(updated);
+    localStorage.setItem(QUEUE_KEY,JSON.stringify(updated));
+    setExpandedRx(null);
+    showToast("✅ تم صرف الوصفة وتحديث المخزن",true);
+    // إشعار للطبيب
+    const notifArr=JSON.parse(localStorage.getItem("dwaee_doc_notifs")||"[]");
+    const p=queue.find(x=>x.id===patientId);
+    notifArr.push({ icon:"✅",title:"تم صرف الوصفة",body:`وصفة ${p?.name||""} صُرفت بنجاح`,time:new Date().toLocaleTimeString("ar-IQ",{hour:"2-digit",minute:"2-digit"}) });
+    localStorage.setItem("dwaee_doc_notifs",JSON.stringify(notifArr));
+  }
+
+  // إضافة مادة للمخزن
+  function addToStock(){
+    const { name,qty,minQty,price,expiry,barcode }=newStock;
+    if(!name.trim()||!qty||!barcode.trim()){ showToast("🚨 يرجى ملء الحقول الأساسية!"); return; }
+    const item={ id:`s${Date.now()}`, name:name.trim(), qty:parseInt(qty)||0,
+      minQty:parseInt(minQty)||5, price:parseInt(price)||0, expiry:expiry||"", barcode:barcode.trim() };
+    setStock(s=>[...s,item]);
+    setNewStock({ name:"",qty:"",minQty:"",price:"",expiry:"",barcode:"" });
+    setShowAddStock(false);
+    showToast(`✅ تم إضافة ${item.name} للمخزن`,true);
+  }
+
+  const C={
+    bg:   dark?"#0B1221":"#F8FAFC",
+    txt:  dark?"#f0fdf4":"#1e293b",
+    mut:  dark?"#6b7280":"#94a3b8",
+    bor:  dark?"#1E293B":"#f1f5f9",
+    bar:  dark?"linear-gradient(135deg,#0d1729,#091528)":"#ffffff",
+    inp:  { background:dark?"rgba(52,211,153,.05)":"#f8fafc",
+            borderColor:dark?"rgba(52,211,153,.2)":"#e2e8f0",
+            color:dark?"#f0fdf4":"#1e293b" },
+  };
+
+  // إحصاءات المخزن
+  const lowStock=stock.filter(s=>s.qty<=s.minQty);
+  const expiredStock=stock.filter(s=>getExpClass(s.expiry)==="expired");
+  const warningStock=stock.filter(s=>getExpClass(s.expiry)==="warning");
+  const todayRx=prescriptions.length;
+  const pendingRx=prescriptions.filter(p=>p.status!=="done").length;
+
+  const filteredStock=stockSearch
+    ? stock.filter(s=>s.name.toLowerCase().includes(stockSearch.toLowerCase())||s.barcode.includes(stockSearch))
+    : stock;
+
+  return (
+    <div style={{ background:C.bg,color:C.txt,width:"100vw",height:"100vh",
+      display:"flex",flexDirection:"column",overflow:"hidden",transition:"all .3s" }}>
+
+      {/* ===== هيدر ===== */}
+      <header style={{
+        background:C.bar, borderBottom:`1px solid ${C.bor}`,
+        height:52,flexShrink:0,display:"flex",alignItems:"center",
+        justifyContent:"space-between",padding:"0 14px",gap:10,zIndex:50,
+        boxShadow:dark?"0 2px 20px rgba(0,0,0,.4)":"0 1px 8px rgba(0,0,0,.06)",
+        position:"relative"
+      }}>
+        {dark&&<div style={{position:"absolute",bottom:0,left:0,right:0,height:1,
+          background:"linear-gradient(90deg,transparent,rgba(52,211,153,.3),transparent)"}}/>}
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:36,height:36,borderRadius:10,
+            background:"linear-gradient(135deg,#059669,#34d399)",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:18,boxShadow:"0 4px 12px rgba(52,211,153,.4)"}}>💊</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:700}}>منظومة دوائي — الصيدلية</div>
+            <div style={{fontSize:9,color:C.mut}}>نظام إدارة الوصفات والمخزن</div>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {/* جرس الإشعارات */}
+          <div style={{position:"relative"}}>
+            <button ref={bellRef} onClick={()=>setShowNotif(s=>!s)} style={{
+              width:36,height:36,borderRadius:10,cursor:"pointer",
+              background:dark?"rgba(255,255,255,.05)":"#f1f5f9",
+              border:`1px solid ${C.bor}`,color:C.mut,
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:15
+            }}><i className="fa-solid fa-bell"/></button>
+            {notifs.length>0&&<span style={{
+              position:"absolute",top:-4,left:-4,width:16,height:16,borderRadius:"50%",
+              background:"#f87171",color:"#fff",fontSize:9,fontWeight:700,
+              display:"flex",alignItems:"center",justifyContent:"center"
+            }}>{notifs.length>9?"9+":notifs.length}</span>}
+            {showNotif&&(
+              <div className="fade-in" style={{
+                position:"absolute",top:42,left:0,width:280,maxHeight:320,
+                background:dark?"#131B2E":"#ffffff",
+                border:`1px solid ${C.bor}`,borderRadius:14,zIndex:600,
+                boxShadow:dark?"0 16px 48px rgba(0,0,0,.6)":"0 8px 32px rgba(0,0,0,.12)",
+                overflow:"hidden",display:"flex",flexDirection:"column"
+              }} onClick={e=>e.stopPropagation()}>
+                <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.bor}`,
+                  display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"#34d399"}}>🔔 الإشعارات</span>
+                  {notifs.length>0&&<button onClick={()=>setNotifs([])}
+                    style={{fontSize:9,color:C.mut,background:"none",border:"none",cursor:"pointer"}}>مسح الكل</button>}
+                </div>
+                <div style={{overflowY:"auto",maxHeight:260}}>
+                  {notifs.length===0
+                    ?<div style={{padding:20,textAlign:"center",color:C.mut,fontSize:11}}>لا توجد إشعارات</div>
+                    :notifs.map((n,i)=>(
+                    <div key={i} style={{padding:"10px 14px",borderBottom:`1px solid ${C.bor}`,
+                      fontSize:11,display:"flex",gap:8,alignItems:"flex-start"}}>
+                      <span style={{fontSize:16}}>{n.icon||"🔔"}</span>
+                      <div>
+                        <div style={{fontWeight:700}}>{n.title}</div>
+                        <div style={{color:C.mut,fontSize:10,marginTop:2}}>{n.body}</div>
+                        <div style={{color:C.mut,fontSize:9,marginTop:2}}>{n.time}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* مفتاح الثيم */}
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",
+            borderRadius:12,border:`1px solid ${C.bor}`,
+            background:dark?"rgba(255,255,255,.04)":"#f8fafc"}}>
+            <span style={{fontSize:13}}>{dark?"🌙":"☀️"}</span>
+            <div onClick={()=>setDark(d=>!d)} style={{
+              position:"relative",width:42,height:22,borderRadius:20,cursor:"pointer",
+              background:dark?"#059669":"#cbd5e1",transition:"all .3s"}}>
+              <div style={{position:"absolute",top:3,left:dark?22:2,width:16,height:16,
+                borderRadius:"50%",background:"#fff",transition:"all .3s",
+                boxShadow:"0 2px 6px rgba(0,0,0,.2)"}}/>
+            </div>
+            <span style={{fontSize:13}}>{dark?"☀️":"🌙"}</span>
+          </div>
+        </div>
+      </header>
+
+      {/* ===== تبويبات ===== */}
+      <div style={{
+        display:"flex",gap:2,padding:"6px 14px",flexShrink:0,
+        background:dark?"rgba(11,18,33,.8)":"rgba(248,250,252,.95)",
+        borderBottom:`1px solid ${C.bor}`
+      }}>
+        {[
+          {key:"prescriptions",icon:"fa-prescription",label:"الوصفات",badge:pendingRx},
+          {key:"stock",icon:"fa-boxes-stacked",label:"المخزن",badge:lowStock.length},
+          {key:"reports",icon:"fa-chart-bar",label:"التقارير",badge:0},
+        ].map(t=>(
+          <button key={t.key} onClick={()=>setTab(t.key)} style={{
+            padding:"7px 16px",borderRadius:9,border:"none",cursor:"pointer",
+            fontSize:11,fontWeight:700,display:"flex",alignItems:"center",gap:6,
+            transition:"all .2s",position:"relative",
+            background:tab===t.key?"linear-gradient(135deg,rgba(52,211,153,.15),rgba(5,150,105,.1))":"transparent",
+            color:tab===t.key?"#34d399":C.mut,
+            borderBottom:tab===t.key?"2px solid #34d399":"2px solid transparent"
+          }}>
+            <i className={`fa-solid ${t.icon}`}/>
+            {t.label}
+            {t.badge>0&&<span style={{
+              background:t.key==="stock"?"rgba(251,191,36,.2)":"rgba(52,211,153,.2)",
+              border:`1px solid ${t.key==="stock"?"rgba(251,191,36,.4)":"rgba(52,211,153,.4)"}`,
+              color:t.key==="stock"?"#fbbf24":"#34d399",
+              borderRadius:20,padding:"0 6px",fontSize:9,fontWeight:700
+            }}>{t.badge}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* ===== المحتوى ===== */}
+      <div style={{flex:1,overflow:"hidden",padding:10,display:"flex",flexDirection:"column",gap:10}}>
+
+        {/* ===== تبويب الوصفات ===== */}
+        {tab==="prescriptions"&&(
+          <div style={{flex:1,overflow:"hidden",display:"flex",gap:10}}>
+            {/* قائمة الوصفات */}
+            <div style={{width:280,flexShrink:0,overflowY:"auto",display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.mut,marginBottom:2}}>
+                الوصفات الواردة ({prescriptions.length})
+              </div>
+              {prescriptions.length===0?(
+                <Card dark={dark} style={{padding:24,textAlign:"center"}}>
+                  <i className="fa-solid fa-prescription" style={{fontSize:32,color:C.mut,opacity:.3,display:"block",marginBottom:8}}/>
+                  <p style={{fontSize:11,color:C.mut}}>لا توجد وصفات حالياً</p>
+                  <p style={{fontSize:10,color:C.mut,opacity:.7}}>بانتظار وصفات من الطبيب...</p>
+                </Card>
+              ):prescriptions.map(p=>{
+                const isExp=expandedRx===p.id;
+                const isDone=p.status==="done";
+                const statusColor=isDone?"#34d399":p.status==="inside"?"#38bdf8":"#fbbf24";
+                return(
+                  <Card key={p.id} dark={dark} style={{
+                    cursor:"pointer",transition:"all .2s",
+                    border:`1px solid ${isExp?statusColor+"55":C.bor}`,
+                    ...(isExp?{boxShadow:`0 0 12px ${statusColor}22`}:{})
+                  }}>
+                    <div onClick={()=>setExpandedRx(isExp?null:p.id)}
+                      style={{padding:"10px 12px",display:"flex",alignItems:"center",gap:10}}>
+                      {/* مؤشر الحالة */}
+                      <div style={{width:8,height:8,borderRadius:"50%",background:statusColor,
+                        flexShrink:0,...(isDone?{}:{animation:"pulse 1.5s ease-in-out infinite"})}}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:700}}>{p.name}</div>
+                        <div style={{fontSize:9,color:C.mut,marginTop:2}}>
+                          {p.meds?.length||0} أدوية • {p.createdAt||""}
+                        </div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{
+                          fontSize:9,padding:"2px 8px",borderRadius:20,fontWeight:700,
+                          background:`${statusColor}18`,border:`1px solid ${statusColor}33`,color:statusColor
+                        }}>{isDone?"صُرفت":p.status==="inside"?"جارٍ":"معلقة"}</span>
+                        <i className={`fa-solid fa-chevron-${isExp?"up":"down"}`}
+                          style={{fontSize:10,color:C.mut}}/>
+                      </div>
+                    </div>
+                    {/* تفاصيل الوصفة */}
+                    {isExp&&(
+                      <div className="fade-in" style={{
+                        borderTop:`1px solid ${C.bor}`,padding:"10px 12px"
+                      }}>
+                        {/* التشخيص */}
+                        {p.diagnosis&&(
+                          <div style={{padding:"6px 10px",borderRadius:8,marginBottom:8,
+                            background:dark?"rgba(52,211,153,.05)":"#f0fdf4",
+                            border:`1px solid rgba(52,211,153,.15)`,fontSize:10,color:C.mut}}>
+                            <span style={{fontWeight:700,color:"#34d399"}}>التشخيص: </span>
+                            {p.diagnosis}
+                          </div>
+                        )}
+                        {/* قائمة الأدوية */}
+                        <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:10}}>
+                          {p.meds?.map((med,i)=>{
+                            const stockItem=stock.find(s=>s.barcode===med.barcode||s.name===med.name);
+                            const inStock=stockItem&&stockItem.qty>0;
+                            return(
+                              <div key={i} style={{
+                                padding:"7px 10px",borderRadius:8,
+                                background:inStock
+                                  ?dark?"rgba(52,211,153,.06)":"rgba(52,211,153,.04)"
+                                  :dark?"rgba(248,113,113,.06)":"rgba(248,113,113,.04)",
+                                border:`1px solid ${inStock?"rgba(52,211,153,.2)":"rgba(248,113,113,.2)"}`,
+                                display:"flex",alignItems:"center",justifyContent:"space-between"
+                              }}>
+                                <div>
+                                  <div style={{fontSize:11,fontWeight:700}}>{med.name}</div>
+                                  {stockItem&&(
+                                    <div style={{fontSize:9,color:C.mut,marginTop:1}}>
+                                      المخزون: {stockItem.qty} علبة
+                                    </div>
+                                  )}
+                                </div>
+                                {!inStock&&(
+                                  <button style={{
+                                    fontSize:9,padding:"3px 8px",borderRadius:6,cursor:"pointer",
+                                    background:"rgba(56,189,248,.1)",border:"1px solid rgba(56,189,248,.3)",
+                                    color:"#38bdf8",fontWeight:700
+                                  }}>عرض البدائل</button>
+                                )}
+                                {inStock&&<i className="fa-solid fa-check" style={{color:"#34d399",fontSize:12}}/>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* أزرار الصرف */}
+                        {!isDone&&(
+                          <div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>dispense(p.id)} style={{
+                              flex:1,padding:"9px 0",borderRadius:9,border:"none",cursor:"pointer",
+                              background:"linear-gradient(to right,#059669,#34d399)",
+                              color:"#fff",fontWeight:700,fontSize:11,
+                              boxShadow:"0 4px 12px rgba(52,211,153,.3)"
+                            }}>✅ صرف الوصفة كاملة</button>
+                            <button style={{
+                              padding:"9px 12px",borderRadius:9,cursor:"pointer",
+                              background:"rgba(56,189,248,.1)",border:"1px solid rgba(56,189,248,.3)",
+                              color:"#38bdf8",fontWeight:700,fontSize:11
+                            }}>جزئي</button>
+                          </div>
+                        )}
+                        {isDone&&(
+                          <div style={{textAlign:"center",padding:"8px 0",
+                            fontSize:11,color:"#34d399",fontWeight:700}}>
+                            ✅ تم الصرف في {p.dispensedAt||""}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+            {/* منطقة البحث بالباركود */}
+            <Card dark={dark} style={{flex:1,display:"flex",flexDirection:"column",padding:14,gap:10}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#34d399",marginBottom:2}}>
+                <i className="fa-solid fa-barcode" style={{marginLeft:6}}/>
+                بحث وتحقق سريع
+              </div>
+              <div style={{position:"relative"}}>
+                <i className="fa-solid fa-magnifying-glass" style={{
+                  position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                  color:C.mut,fontSize:13
+                }}/>
+                <i className="fa-solid fa-camera" style={{
+                  position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",
+                  color:"#38bdf8",fontSize:14,cursor:"pointer"
+                }}/>
+                <input value={search} onChange={e=>setSearch(e.target.value)}
+                  placeholder="ابحث باسم الدواء أو الباركود..."
+                  style={{...C.inp,width:"100%",height:42,padding:"0 40px",
+                    borderRadius:10,border:`1px solid ${C.bor}`,fontSize:12,outline:"none"}}/>
+              </div>
+              {/* نتائج البحث */}
+              {search&&(
+                <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
+                  {stock.filter(s=>s.name.toLowerCase().includes(search.toLowerCase())||s.barcode.includes(search))
+                    .map(s=>(
+                    <div key={s.id} style={{
+                      padding:"10px 12px",borderRadius:10,
+                      background:dark?"rgba(52,211,153,.05)":"#f0fdf4",
+                      border:`1px solid rgba(52,211,153,.15)`,
+                      display:"flex",alignItems:"center",justifyContent:"space-between"
+                    }}>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:700}}>{s.name}</div>
+                        <div style={{fontSize:10,color:C.mut,marginTop:2}}>
+                          باركود: {s.barcode} • {s.price.toLocaleString()} د.ع
+                        </div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        <ExpBadge expiry={s.expiry} dark={dark}/>
+                        <span style={{
+                          fontSize:12,fontWeight:700,
+                          color:s.qty<=s.minQty?"#f87171":"#34d399"
+                        }}>{s.qty} علبة</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!search&&(
+                <div style={{flex:1,display:"flex",flexDirection:"column",
+                  alignItems:"center",justifyContent:"center",gap:8,color:C.mut}}>
+                  <i className="fa-solid fa-barcode" style={{fontSize:48,opacity:.2}}/>
+                  <p style={{fontSize:12}}>ابحث عن دواء أو امرر الباركود</p>
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ===== تبويب المخزن ===== */}
+        {tab==="stock"&&(
+          <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",gap:10}}>
+            {/* شريط البحث + زر إضافة */}
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              <div style={{position:"relative",flex:1}}>
+                <i className="fa-solid fa-magnifying-glass" style={{
+                  position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                  color:C.mut,fontSize:13
+                }}/>
+                <i className="fa-solid fa-camera" style={{
+                  position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",
+                  color:"#38bdf8",fontSize:14,cursor:"pointer"
+                }}/>
+                <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)}
+                  placeholder="ابحث باسم الدواء أو الباركود..."
+                  style={{...C.inp,width:"100%",height:40,padding:"0 40px",
+                    borderRadius:10,border:`1px solid ${C.bor}`,fontSize:12,outline:"none"}}/>
+              </div>
+              <button onClick={()=>setShowAddStock(true)} style={{
+                padding:"0 16px",borderRadius:10,border:"none",cursor:"pointer",
+                background:"linear-gradient(135deg,#059669,#34d399)",
+                color:"#fff",fontWeight:700,fontSize:11,
+                display:"flex",alignItems:"center",gap:6,
+                boxShadow:"0 4px 12px rgba(52,211,153,.3)",flexShrink:0
+              }}>
+                <i className="fa-solid fa-plus"/>
+                إضافة مادة
+              </button>
+            </div>
+            {/* جدول المخزن */}
+            <Card dark={dark} style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              {/* رأس */}
+              <div style={{
+                padding:"8px 14px",background:dark?"rgba(11,18,33,.6)":"#f8fafc",
+                borderBottom:`1px solid ${C.bor}`,flexShrink:0,
+                display:"grid",gridTemplateColumns:"1fr 80px 80px 100px 80px 90px",
+                gap:8,fontSize:10,fontWeight:700,color:C.mut
+              }}>
+                <span>الدواء</span>
+                <span style={{textAlign:"center"}}>الكمية</span>
+                <span style={{textAlign:"center"}}>الحد الأدنى</span>
+                <span style={{textAlign:"center"}}>السعر</span>
+                <span style={{textAlign:"center"}}>الباركود</span>
+                <span style={{textAlign:"center"}}>الإكسباير</span>
+              </div>
+              <div style={{flex:1,overflowY:"auto"}}>
+                {filteredStock.map(s=>{
+                  const isLow=s.qty<=s.minQty;
+                  const expCls=getExpClass(s.expiry);
+                  return(
+                    <div key={s.id} style={{
+                      padding:"10px 14px",borderBottom:`1px solid ${C.bor}`,
+                      display:"grid",gridTemplateColumns:"1fr 80px 80px 100px 80px 90px",
+                      gap:8,alignItems:"center",transition:"all .2s",
+                      background:isLow
+                        ?dark?"rgba(248,113,113,.05)":"rgba(248,113,113,.03)"
+                        :expCls==="expired"
+                        ?dark?"rgba(248,113,113,.05)":"rgba(248,113,113,.03)"
+                        :"transparent"
+                    }}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {isLow&&<i className="fa-solid fa-bell" style={{
+                          color:"#fbbf24",fontSize:12,
+                          animation:"pulse 1.5s ease-in-out infinite"
+                        }}/>}
+                        <div>
+                          <div style={{fontSize:11,fontWeight:700}}>{s.name}</div>
+                          {isLow&&<div style={{fontSize:9,color:"#f87171",marginTop:1}}>
+                            ⚠️ أوشك على النفاد
+                          </div>}
+                        </div>
+                      </div>
+                      <div style={{textAlign:"center",fontSize:12,fontWeight:700,
+                        color:s.qty===0?"#f87171":isLow?"#fbbf24":"#34d399"}}>
+                        {s.qty}
+                      </div>
+                      <div style={{textAlign:"center",fontSize:11,color:C.mut}}>{s.minQty}</div>
+                      <div style={{textAlign:"center",fontSize:11,color:"#a78bfa",fontWeight:700}}>
+                        {s.price.toLocaleString()} د.ع
+                      </div>
+                      <div style={{textAlign:"center"}}>
+                        <code style={{fontSize:9,color:C.mut}}>{s.barcode}</code>
+                      </div>
+                      <div style={{textAlign:"center"}}>
+                        <ExpBadge expiry={s.expiry} dark={dark}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ===== تبويب التقارير ===== */}
+        {tab==="reports"&&(
+          <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
+            {/* بطاقات الإحصاءات */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,flexShrink:0}}>
+              {[
+                {icon:"fa-prescription",label:"وصفات اليوم",value:todayRx,color:"#34d399"},
+                {icon:"fa-hourglass-half",label:"معلقة",value:pendingRx,color:"#fbbf24"},
+                {icon:"fa-triangle-exclamation",label:"ناقصة بالمخزن",value:lowStock.length,color:"#f87171"},
+                {icon:"fa-calendar-xmark",label:"منتهية الصلاحية",value:expiredStock.length,color:"#f87171"},
+              ].map(s=>(
+                <Card key={s.label} dark={dark} style={{padding:16,display:"flex",alignItems:"center",gap:12}}>
+                  {dark&&<div style={{position:"absolute",top:0,left:0,right:0,height:1,
+                    background:`linear-gradient(90deg,transparent,${s.color}33,transparent)`}}/>}
+                  <div style={{
+                    width:44,height:44,borderRadius:12,flexShrink:0,
+                    background:`${s.color}18`,border:`1px solid ${s.color}33`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:20,color:s.color
+                  }}><i className={`fa-solid ${s.icon}`}/></div>
+                  <div>
+                    <div style={{fontSize:24,fontWeight:900,color:s.color,
+                      ...(dark?{textShadow:`0 0 10px ${s.color}55`}:{})}}>{s.value}</div>
+                    <div style={{fontSize:10,color:C.mut,marginTop:2}}>{s.label}</div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+            {/* أدوية ناقصة */}
+            {lowStock.length>0&&(
+              <Card dark={dark}>
+                <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.bor}`,
+                  fontSize:12,fontWeight:700,color:"#fbbf24",
+                  display:"flex",alignItems:"center",gap:6}}>
+                  <i className="fa-solid fa-triangle-exclamation"/>
+                  أدوية تحتاج إعادة تعبئة ({lowStock.length})
+                </div>
+                <div style={{padding:12,display:"flex",flexDirection:"column",gap:6}}>
+                  {lowStock.map(s=>(
+                    <div key={s.id} style={{
+                      padding:"8px 12px",borderRadius:9,
+                      background:"rgba(251,191,36,.08)",border:"1px solid rgba(251,191,36,.2)",
+                      display:"flex",alignItems:"center",justifyContent:"space-between"
+                    }}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:700}}>{s.name}</div>
+                        <div style={{fontSize:9,color:C.mut,marginTop:1}}>
+                          الكمية الحالية: {s.qty} | الحد الأدنى: {s.minQty}
+                        </div>
+                      </div>
+                      <span style={{
+                        fontSize:10,fontWeight:700,color:"#fbbf24",
+                        background:"rgba(251,191,36,.15)",border:"1px solid rgba(251,191,36,.3)",
+                        borderRadius:8,padding:"3px 10px"
+                      }}>نفاد وشيك ⚠️</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+            {/* أدوية منتهية */}
+            {(expiredStock.length>0||warningStock.length>0)&&(
+              <Card dark={dark}>
+                <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.bor}`,
+                  fontSize:12,fontWeight:700,color:"#f87171",
+                  display:"flex",alignItems:"center",gap:6}}>
+                  <i className="fa-solid fa-calendar-xmark"/>
+                  تنبيهات الصلاحية ({expiredStock.length+warningStock.length})
+                </div>
+                <div style={{padding:12,display:"flex",flexDirection:"column",gap:6}}>
+                  {[...expiredStock,...warningStock].map(s=>(
+                    <div key={s.id} style={{
+                      padding:"8px 12px",borderRadius:9,
+                      background:getExpClass(s.expiry)==="expired"
+                        ?"rgba(248,113,113,.08)":"rgba(251,191,36,.06)",
+                      border:`1px solid ${getExpClass(s.expiry)==="expired"
+                        ?"rgba(248,113,113,.25)":"rgba(251,191,36,.2)"}`,
+                      display:"flex",alignItems:"center",justifyContent:"space-between"
+                    }}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:700}}>{s.name}</div>
+                        <div style={{fontSize:9,color:C.mut,marginTop:1}}>
+                          الكمية: {s.qty} علبة
+                        </div>
+                      </div>
+                      <ExpBadge expiry={s.expiry} dark={dark}/>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ===== مودال إضافة مادة ===== */}
+      {showAddStock&&(
+        <div className="fade-in" style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,.8)",backdropFilter:"blur(4px)",
+          zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:10
+        }} onClick={()=>setShowAddStock(false)}>
+          <Card dark={dark} style={{width:"100%",maxWidth:500,overflow:"visible"}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.bor}`,
+              display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:13,fontWeight:700,color:"#34d399"}}>
+                <i className="fa-solid fa-plus-circle" style={{marginLeft:6}}/>
+                إضافة مادة للمخزن
+              </span>
+              <button onClick={()=>setShowAddStock(false)} style={{
+                background:"none",border:"none",color:C.mut,cursor:"pointer",fontSize:16
+              }}>✕</button>
+            </div>
+            <div style={{padding:16,display:"flex",flexDirection:"column",gap:10}}>
+              {[
+                {key:"name",label:"اسم الدواء",ph:"مثال: Amoxicillin 500mg",type:"text"},
+                {key:"barcode",label:"الباركود",ph:"مثال: 6001234",type:"text"},
+                {key:"qty",label:"الكمية",ph:"مثال: 50",type:"number"},
+                {key:"minQty",label:"الحد الأدنى للتنبيه",ph:"مثال: 10",type:"number"},
+                {key:"price",label:"السعر (د.ع)",ph:"مثال: 5000",type:"number"},
+                {key:"expiry",label:"تاريخ الإكسباير",ph:"مثال: 2026-12",type:"text"},
+              ].map(f=>(
+                <div key={f.key}>
+                  <label style={{fontSize:10,fontWeight:700,color:C.mut,display:"block",marginBottom:3}}>{f.label}</label>
+                  <input type={f.type} value={newStock[f.key]}
+                    onChange={e=>setNewStock(s=>({...s,[f.key]:e.target.value}))}
+                    placeholder={f.ph}
+                    style={{...C.inp,width:"100%",height:36,padding:"0 10px",
+                      borderRadius:8,border:`1px solid ${C.bor}`,fontSize:11,outline:"none"}}/>
+                </div>
+              ))}
+              <button onClick={addToStock} style={{
+                width:"100%",padding:"10px 0",borderRadius:10,border:"none",cursor:"pointer",
+                background:"linear-gradient(to right,#059669,#34d399)",
+                color:"#fff",fontWeight:700,fontSize:12,marginTop:4,
+                boxShadow:"0 4px 12px rgba(52,211,153,.35)"
+              }}>💾 حفظ بالمخزن</button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ===== توست ===== */}
+      {toast&&(
+        <div className="slide-in" style={{
+          position:"fixed",bottom:16,left:16,zIndex:99999,
+          padding:"10px 20px",borderRadius:12,fontSize:11,fontWeight:700,color:"#fff",
+          background:toast.ok
+            ?"linear-gradient(to right,#059669,#34d399)"
+            :"linear-gradient(to right,#b91c1c,#f87171)",
+          boxShadow:"0 4px 16px rgba(0,0,0,.3)"
+        }}>{toast.msg}</div>
+      )}
+
+      {/* إغلاق الإشعارات */}
+      {showNotif&&<div style={{position:"fixed",inset:0,zIndex:49}}
+        onClick={()=>setShowNotif(false)}/>}
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(<PharmacyApp/>);
+</script>
+</body>
+</html>
